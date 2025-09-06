@@ -21,7 +21,7 @@ const domain_mappings = {
 };
 
 // 需要重定向的路径
-const redirect_paths = ['/', '/login', '/signup', '/copilot'];
+const redirect_paths = ['/login', '/signup', '/copilot'];
 
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request));
@@ -30,6 +30,18 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   const url = new URL(request.url);
   const current_host = url.host;
+  
+  // 添加鉴权逻辑
+  if (url.pathname === '/') {
+    return new Response('Access Forbidden', { status: 403 });
+  }
+  
+  // 特殊路径允许访问（从环境变量获取）
+  const SPECIAL_ACCESS_PATH = typeof SPECIAL_PATH !== 'undefined' ? SPECIAL_PATH : '/peroe';
+  if (url.pathname === SPECIAL_ACCESS_PATH) {
+    // 重写路径为根路径以便正常处理
+    url.pathname = '/';
+  }
   
   // 检测Host头，优先使用Host头中的域名来决定后缀
   const host_header = request.headers.get('Host');
