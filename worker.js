@@ -33,7 +33,7 @@ async function handleRequest(request) {
   
   // 添加鉴权逻辑
   if (url.pathname === '/') {
-    return new Response('Access Forbidden', { status: 403 });
+    return new Response('Access Forbidden', { status: 404 });
   }
   
   // 特殊路径允许访问（从环境变量获取）
