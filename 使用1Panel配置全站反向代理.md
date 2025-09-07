@@ -281,6 +281,7 @@ location /internal_proxy {
 
 * **常见错误**：
   * `"server_name" directive is not allowed here` - 这表示你在配置文件中手动添加了server_name指令。解决方法：删除server_name行，在1Panel网站设置中添加域名。
+  * `"location" directive is not allowed here` - 这表示你可能在server块外部添加了location指令，或者自己添加了server { 标记。解决方法：确保不要自己添加server { 或 } 标记，让1Panel自动添加这些标记。
   * `unknown directive "```"` - 这表示你复制了Markdown代码块的结束标记。解决方法：删除这些非Nginx语法的标记。
 
 * **查看日志**：如果代理不工作，可以在 1Panel 的 **应用** -> **openresty** 设置 -> **查看日志** 中，检查 `error.log`，看看有没有 Lua 脚本执行错误或其他 Nginx 错误。
@@ -288,3 +289,97 @@ location /internal_proxy {
 * **1Panel 更新**：升级 1Panel 或 OpenResty 应用时，主配置文件 `nginx.conf` **有可能会被覆盖**。请务必备份你在 `nginx.conf` 中添加的 Lua 全局配置，以便在升级后恢复。
 
 * **浏览器缓存**：测试时，请使用浏览器的隐身模式或禁用缓存，以避免旧的 DNS 记录或页面缓存造成影响。
+
+### 终极解决方案：直接编辑配置文件
+
+如果你在使用1Panel的网站配置编辑器时遇到持续的错误（如 `"location" directive is not allowed here`），可能是因为1Panel在后台自动将你的配置包裹在了一个额外的location块中。这种情况下，你可以尝试直接编辑原始配置文件：
+
+1. **准备网站壳**：
+   * 在1Panel中创建一个静态网站，配置好所有域名和SSL证书
+   * **不要**使用网站设置中的"配置文件"编辑器
+
+2. **直接编辑配置文件**：
+   * 在1Panel左侧菜单中，点击**"主机"** -> **"文件"**
+   * 进入路径：`/usr/local/openresty/nginx/conf/conf.d/`
+   * 找到你的网站配置文件（如`your-domain.com.conf`）并打开
+   * 删除所有内容，粘贴完整的server块配置
+
+3. **完整配置示例**：
+
+```nginx
+# 直接编辑配置文件，绕开1Panel的图形编辑器
+# 这必须是一个完整、独立的server配置块
+
+server {
+    # 监听端口和SSL设置
+    listen 80;
+    listen 443 ssl http2;
+
+    # 填写你的所有域名，用空格隔开
+    server_name git.your-domain.com api-github-com.your-domain.com raw-githubusercontent-com.your-domain.com;
+
+    # SSL证书路径
+    ssl_certificate /usr/local/openresty/nginx/conf/ssl/your-domain.com/fullchain.pem;
+    ssl_certificate_key /usr/local/openresty/nginx/conf/ssl/your-domain.com/privkey.pem;
+   
+    # SSL基础配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+   
+    # 核心代理逻辑
+    resolver 8.8.8.8 1.1.1.1 valid=300s;
+    resolver_timeout 5s;
+
+    location / {
+        content_by_lua_block {
+            local host = ngx.var.host
+            local shared_data = ngx.shared.domain_mappings
+
+            local mappings = {
+                 ['git.your-domain.com'] = 'github.com',
+                 ['api-github-com.your-domain.com'] = 'api.github.com',
+                 ['raw-githubusercontent-com.your-domain.com'] = 'raw.githubusercontent.com'
+            }
+
+            local target_host = mappings[host]
+
+            if not target_host then
+                ngx.status = 404
+                ngx.say("404 Not Found: Domain mapping does not exist for " .. host)
+                return
+            }
+
+            shared_data:set("target_host_for_" .. host, target_host)
+            ngx.exec("/internal_proxy" .. ngx.var.request_uri)
+        }
+    }
+
+    location /internal_proxy {
+        internal;
+       
+        set_by_lua_block $r_host {
+            local host = ngx.var.host
+            local shared_data = ngx.shared.domain_mappings
+            return shared_data:get("target_host_for_" .. host)
+        }
+   
+        set $r_uri $request_uri;
+        if ($r_uri ~* "^/internal_proxy/(.*)") {
+            set $r_uri /$1;
+        }
+
+        proxy_pass https://$r_host$r_uri;
+        proxy_ssl_server_name on;
+        proxy_set_header Host $r_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+    }
+}
+```
+
+4. **保存并重启**：
+   * 保存修改后的配置文件
+   * 在1Panel的**"应用"**列表中找到**OpenResty**，点击**"重启"**
