@@ -24,11 +24,18 @@
 
 ### 第二步：在 1Panel 中创建网站
 
-1. 登录 1Panel，进入左侧菜单的 **“网站”**。
-2. 点击 **“创建网站”** 按钮。
-3. 在弹出的窗口中，选择 **“静态网站”**。
-4. **填写主域名**：这里填写一个你的主域名，比如 `proxy.your-domain.com`。**这只是一个占位符**，我们稍后会在配置文件中用正则表达式覆盖它。
-5. 点击 **“确认”** 创建网站。
+1. 登录 1Panel，进入左侧菜单的 **"网站"**。
+2. 点击 **"创建网站"** 按钮。
+3. 在弹出的窗口中，选择 **"静态网站"**。
+4. **填写主域名**：这里填写你的主域名，比如 `proxy.your-domain.com`。
+5. **添加其他域名**：点击"添加更多域名"，添加你需要代理的所有子域名，例如：
+   - `git.your-domain.com`
+   - `api-github-com.your-domain.com`
+   - `raw-githubusercontent-com.your-domain.com`
+   - 其他你需要代理的域名
+   
+   > **重要**：所有需要代理的域名都必须在这里添加，否则Nginx将无法识别这些域名的请求。
+6. 点击 **"确认"** 创建网站。
 
 
 
@@ -48,9 +55,9 @@
 
 #### 第 4.1 部分：添加全局 Lua 配置到 `nginx.conf`
 
-这部分的配置（`lua_shared_dict` 和 `init_worker_by_lua_block`）需要在 `http` 上下文中，而 1Panel 的网站配置编辑器只能修改 `server` 上下文。所以我们需要手动修改主配置文件。
+这部分的配置（`lua_shared_dict`）需要在 `http` 上下文中，而 1Panel 的网站配置编辑器只能修改 `server` 上下文。所以我们需要手动修改主配置文件。
 
-1. 在 1Panel 左侧菜单中选择 **“主机”** -> **“文件”**。
+1. 在 1Panel 左侧菜单中选择 **"主机"** -> **"文件"**。
 2. 导航到 OpenResty 的主配置文件路径：
  `/opt/1panel/apps/openresty/openresty/conf/nginx.conf`
 3. 双击打开 `nginx.conf` 文件进行编辑。
@@ -60,41 +67,10 @@
     # =================== START: 自定义全局配置 ===================
     # 定义域名映射关系的 Lua 共享字典
     lua_shared_dict domain_mappings 1m;
-
-    # 在 Nginx 启动时初始化共享字典
-    init_worker_by_lua_block {
-        if ngx.worker.id() == 0 then
-            local shared_dict = ngx.shared.domain_mappings
-            local mappings = {
-                ['git.'] = 'github.com',
-                ['avatars-githubusercontent-com.'] = 'avatars.githubusercontent.com',
-                ['github-githubassets-com.'] = 'github.githubassets.com',
-                ['collector-github-com.'] = 'collector.github.com',
-                ['api-github-com.'] = 'api.github.com',
-                ['raw-githubusercontent-com.'] = 'raw.githubusercontent.com',
-                ['gist-githubusercontent-com.'] = 'gist.githubusercontent.com',
-                ['github-io.'] = 'github.io',
-                ['assets-cdn-github-com.'] = 'assets-cdn.github.com',
-                ['cdn.jsdelivr-net.'] = 'cdn.jsdelivr.net',
-                ['securitylab-github-com.'] = 'securitylab.github.com',
-                ['www-githubstatus-com.'] = 'www.githubstatus.com',
-                ['npmjs-com.'] = 'npmjs.com',
-                ['git-lfs-github-com.'] = 'git-lfs.github.com',
-                ['githubusercontent-com.'] = 'githubusercontent.com',
-                ['github-global-ssl-fastly-net.'] = 'github.global.ssl.fastly.net',
-                ['api-npms-io.'] = 'api.npms.io',
-                ['github-community.'] = 'github.community',
-                ['wj.'] = 'zh.wikipedia.org',
-                ['upload.'] = 'upload.wikimedia.org',
-                ['meta.'] = 'meta.wikimedia.org'
-            }
-            for prefix, original_domain in pairs(mappings) do
-                shared_dict:set(prefix, original_domain)
-            end
-        end
-    }
     # ==================== END: 自定义全局配置 ====================
-    ```
+```
+
+> **注意**：我们只添加了共享字典的定义，而不添加任何`init_worker_by_lua_file`或`init_worker_by_lua_block`指令，因为1Panel的WAF配置中已经有了`init_worker_by_lua_file`指令，会导致冲突。域名映射的初始化将在网站配置的`content_by_lua_block`中完成。
 5.  点击右上角的 **“保存”** 按钮。
 
 #### 第 4.2 部分：修改网站的 `server` 配置
@@ -109,9 +85,14 @@
     *   1Panel 会自动管理 `listen` 和 `ssl_certificate` 等指令，所以我们提供的模板会更简洁。你粘贴进去后，1Panel 会自动合并这些必需的指令。
 
 ```nginx
+# 1Panel会自动添加server块的开始部分，包括listen指令和server_name指令
+# 不要在这里添加server_name指令，而是在1Panel的网站设置中添加域名
+# 你需要在server块内添加以下配置
+
 # 使用正则表达式匹配通配符域名
-# ！！！请将下面的 your-domain\\.com 替换为你自己的域名（注意点号需要转义）
-server_name ~^(?<prefix>[-a-z0-9\.]+\.)(?<domain_suffix>your-domain\.com)$;
+# ！！！请将下面的 your-domain\\.com 替换为你自己的真实域名（注意点号需要转义）
+# 注意：此行仅作为参考，实际配置时应在1Panel的网站设置中设置域名，而不是在配置文件中添加server_name指令
+# server_name ~^(?<prefix>[-a-z0-9\.]+\.)(?<domain_suffix>your-domain\.com)$;
 
 # 1Panel会帮你添加 access_log 和 error_log, 无需手动添加
 
@@ -125,6 +106,37 @@ index index.html index.htm;
 # ----- 核心代理逻辑 -----
 location / {
  content_by_lua_block {
+ -- 初始化域名映射（只在第一次请求时执行）
+ if not ngx.shared.domain_mappings:get('git.') then
+ local shared_dict = ngx.shared.domain_mappings
+ local mappings = {
+ ['git.'] = 'github.com',
+ ['avatars-githubusercontent-com.'] = 'avatars.githubusercontent.com',
+ ['github-githubassets-com.'] = 'github.githubassets.com',
+ ['collector-github-com.'] = 'collector.github.com',
+ ['api-github-com.'] = 'api.github.com',
+ ['raw-githubusercontent-com.'] = 'raw.githubusercontent.com',
+ ['gist-githubusercontent-com.'] = 'gist.githubusercontent.com',
+ ['github-io.'] = 'github.io',
+ ['assets-cdn-github-com.'] = 'assets-cdn.github.com',
+ ['cdn.jsdelivr-net.'] = 'cdn.jsdelivr.net',
+ ['securitylab-github-com.'] = 'securitylab.github.com',
+ ['www-githubstatus-com.'] = 'www.githubstatus.com',
+ ['npmjs-com.'] = 'npmjs.com',
+ ['git-lfs-github-com.'] = 'git-lfs.github.com',
+ ['githubusercontent-com.'] = 'githubusercontent.com',
+ ['github-global-ssl-fastly-net.'] = 'github.global.ssl.fastly.net',
+ ['api-npms-io.'] = 'api.npms.io',
+ ['github-community.'] = 'github.community',
+ ['wj.'] = 'zh.wikipedia.org',
+ ['upload.'] = 'upload.wikimedia.org',
+ ['meta.'] = 'meta.wikimedia.org'
+ }
+ for prefix, original_domain in pairs(mappings) do
+ shared_dict:set(prefix, original_domain)
+ end
+ end
+
  -- 1. 鉴权与特殊路径处理
  if ngx.var.uri == '/' then
  ngx.status = 404
@@ -143,14 +155,22 @@ location / {
  end
 
  -- 3. 查找目标主机
- local prefix = ngx.var.prefix
- local domain_suffix = ngx.var.domain_suffix
+ -- 注意：这里使用的prefix和domain_suffix变量需要在server_name指令中定义
+ -- 确保在1Panel的网站设置中添加了所有需要代理的域名，并且域名格式与mappings表中的前缀匹配
+ local prefix = ngx.var.host:match("^([^.]+%.).*$") -- 提取域名前缀，如从git.example.com提取git.
+ if not prefix then
+  ngx.status = 404
+  ngx.say('Invalid domain format')
+  return
+ end
+
+ local domain_suffix = ngx.var.host:match("^[^.]+%.(.*)$") -- 提取域名后缀
  local shared_dict = ngx.shared.domain_mappings
  local target_host = shared_dict:get(prefix)
 
  if not target_host then
  ngx.status = 404
- ngx.say('Domain not configured for proxy')
+ ngx.say('Domain not configured for proxy: ' .. prefix)
  return
  end
 
@@ -194,8 +214,12 @@ location / {
  string.find(content_type, "application/xml") then
 
  local body = res.body
+ -- 如果domain_suffix为nil，重新从host中提取
+ if not domain_suffix then
+  domain_suffix = ngx.var.host:match("^[^.]+%.(.*)$") -- 提取域名后缀
+ end
  for p, original_domain in shared_dict:pairs() do
- local escaped_domain = string.gsub(original_domain, "%.", "\\.")
+ local escaped_domain = string.gsub(original_domain, "%.", "\\.") 
  local full_proxy_domain = p .. domain_suffix
  body = ngx.re.gsub(body, "(https?://)" .. escaped_domain, "https://" .. full_proxy_domain, "gi")
  body = ngx.re.gsub(body, "(//)" .. escaped_domain, "//" .. full_proxy_domain, "gi")
@@ -248,7 +272,19 @@ location /internal_proxy {
 
 ### 注意事项和问题排查
 
+* **域名配置**：
+  * 确保在1Panel创建网站时添加了所有需要代理的域名（如 `git.your-domain.com`, `api-github-com.your-domain.com` 等）
+  * 不要在网站配置文件中手动添加 `server_name` 指令，这会导致错误
+  * 域名必须与Lua代码中的映射表前缀对应，例如映射表中有 `['git.']`，则必须添加 `git.your-domain.com` 域名
+
 * **配置错误**：如果在保存配置文件或重启 OpenResty 时出错，请检查你粘贴的代码，特别是 `your-domain.com` 是否已正确替换。
+
+* **常见错误**：
+  * `"server_name" directive is not allowed here` - 这表示你在配置文件中手动添加了server_name指令。解决方法：删除server_name行，在1Panel网站设置中添加域名。
+  * `unknown directive "```"` - 这表示你复制了Markdown代码块的结束标记。解决方法：删除这些非Nginx语法的标记。
+
 * **查看日志**：如果代理不工作，可以在 1Panel 的 **应用** -> **openresty** 设置 -> **查看日志** 中，检查 `error.log`，看看有没有 Lua 脚本执行错误或其他 Nginx 错误。
+
 * **1Panel 更新**：升级 1Panel 或 OpenResty 应用时，主配置文件 `nginx.conf` **有可能会被覆盖**。请务必备份你在 `nginx.conf` 中添加的 Lua 全局配置，以便在升级后恢复。
+
 * **浏览器缓存**：测试时，请使用浏览器的隐身模式或禁用缓存，以避免旧的 DNS 记录或页面缓存造成影响。
