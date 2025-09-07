@@ -36,9 +36,8 @@ async function handleRequest(request) {
     return new Response('Access Forbidden', { status: 404 });
   }
   
-  // 特殊路径允许访问（从环境变量获取）
-  const SPECIAL_ACCESS_PATH = typeof SPECIAL_PATH !== 'undefined' ? SPECIAL_PATH : '/peroe';
-  if (url.pathname === SPECIAL_ACCESS_PATH) {
+  // 特殊路径 /peroe 允许访问
+  if (url.pathname === '/peroe') {
     // 重写路径为根路径以便正常处理
     url.pathname = '/';
   }
