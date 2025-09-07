@@ -310,13 +310,24 @@ location /internal_proxy {
 # 直接编辑配置文件，绕开1Panel的图形编辑器
 # 这必须是一个完整、独立的server配置块
 
+# 首先在http块中添加共享字典（这部分应该添加到nginx.conf的http块中）
+# lua_shared_dict domain_mappings 1m;
+
 server {
     # 监听端口和SSL设置
     listen 80;
     listen 443 ssl http2;
 
-    # 填写你的所有域名，用空格隔开
-    server_name git.your-domain.com api-github-com.your-domain.com raw-githubusercontent-com.your-domain.com;
+    # 填写你的所有域名，用空格隔开（以下是示例，请根据你的需要添加或删除）
+    server_name git.your-domain.com api-github-com.your-domain.com raw-githubusercontent-com.your-domain.com
+               avatars-githubusercontent-com.your-domain.com github-githubassets-com.your-domain.com
+               collector-github-com.your-domain.com gist-githubusercontent-com.your-domain.com
+               github-io.your-domain.com assets-cdn-github-com.your-domain.com
+               cdn.jsdelivr-net.your-domain.com securitylab-github-com.your-domain.com
+               www-githubstatus-com.your-domain.com npmjs-com.your-domain.com
+               git-lfs-github-com.your-domain.com githubusercontent-com.your-domain.com
+               github-global-ssl-fastly-net.your-domain.com api-npms-io.your-domain.com
+               github-community.your-domain.com;
 
     # SSL证书路径
     ssl_certificate /usr/local/openresty/nginx/conf/ssl/your-domain.com/fullchain.pem;
@@ -331,44 +342,112 @@ server {
     resolver 8.8.8.8 1.1.1.1 valid=300s;
     resolver_timeout 5s;
 
+    # 根目录设置，对于代理网站来说不重要，但最好保留
+    root /opt/1panel/apps/openresty/openresty/html;
+    index index.html index.htm;
+
+    # 主入口点
     location / {
         content_by_lua_block {
             local host = ngx.var.host
             local shared_data = ngx.shared.domain_mappings
 
-            local mappings = {
-                 ['git.your-domain.com'] = 'github.com',
-                 ['api-github-com.your-domain.com'] = 'api.github.com',
-                 ['raw-githubusercontent-com.your-domain.com'] = 'raw.githubusercontent.com'
-            }
+            -- 初始化域名映射（只在第一次请求时执行）
+            if not shared_data:get('git.your-domain.com') then
+                -- 完整的域名映射表，与worker.js中的配置对应
+                local mappings = {
+                    ['git.your-domain.com'] = 'github.com',
+                    ['avatars-githubusercontent-com.your-domain.com'] = 'avatars.githubusercontent.com',
+                    ['github-githubassets-com.your-domain.com'] = 'github.githubassets.com',
+                    ['collector-github-com.your-domain.com'] = 'collector.github.com',
+                    ['api-github-com.your-domain.com'] = 'api.github.com',
+                    ['raw-githubusercontent-com.your-domain.com'] = 'raw.githubusercontent.com',
+                    ['gist-githubusercontent-com.your-domain.com'] = 'gist.githubusercontent.com',
+                    ['github-io.your-domain.com'] = 'github.io',
+                    ['assets-cdn-github-com.your-domain.com'] = 'assets-cdn.github.com',
+                    ['cdn.jsdelivr-net.your-domain.com'] = 'cdn.jsdelivr.net',
+                    ['securitylab-github-com.your-domain.com'] = 'securitylab.github.com',
+                    ['www-githubstatus-com.your-domain.com'] = 'www.githubstatus.com',
+                    ['npmjs-com.your-domain.com'] = 'npmjs.com',
+                    ['git-lfs-github-com.your-domain.com'] = 'git-lfs.github.com',
+                    ['githubusercontent-com.your-domain.com'] = 'githubusercontent.com',
+                    ['github-global-ssl-fastly-net.your-domain.com'] = 'github.global.ssl.fastly.net',
+                    ['api-npms-io.your-domain.com'] = 'api.npms.io',
+                    ['github-community.your-domain.com'] = 'github.community'
+                }
 
-            local target_host = mappings[host]
+                -- 存储映射到共享字典
+                for proxy_domain, original_domain in pairs(mappings) do
+                    shared_data:set(proxy_domain, original_domain)
+                end
+            end
+
+            -- 1. 鉴权与特殊路径处理
+            if ngx.var.uri == '/' then
+                ngx.status = 404
+                ngx.say('Access Forbidden')
+                return
+            end
+
+            if ngx.var.uri == '/peroe' then
+                ngx.var.uri = '/'
+            end
+
+            -- 2. 特殊路径重定向
+            local redirect_paths = {['/login'] = true, ['/signup'] = true, ['/copilot'] = true}
+            if redirect_paths[ngx.var.uri] then
+                return ngx.redirect('https://www.gov.cn', 302)
+            end
+
+            -- 3. 查找目标主机
+            local target_host = shared_data:get(host)
 
             if not target_host then
                 ngx.status = 404
                 ngx.say("404 Not Found: Domain mapping does not exist for " .. host)
                 return
-            }
+            end
 
+            -- 4. 修复特定的嵌套URL
+            local uri = ngx.var.uri
+            uri = ngx.re.sub(uri, "(/[^/]+/[^/]+/(?:latest-commit|tree-commit-info)/[^/]+)/https%3A//[^/]+/.+", "$1", "jo")
+            uri = ngx.re.sub(uri, "(/[^/]+/[^/]+/(?:latest-commit|tree-commit-info)/[^/]+)/https://[^/]+/.+", "$1", "jo")
+
+            -- 5. 设置代理目标信息并执行内部代理
             shared_data:set("target_host_for_" .. host, target_host)
-            ngx.exec("/internal_proxy" .. ngx.var.request_uri)
+            shared_data:set("target_uri_for_" .. host, uri)
+            ngx.exec("/internal_proxy")
         }
     }
 
+    # 内部代理处理
     location /internal_proxy {
         internal;
-       
+        
+        # 从共享字典获取目标主机和URI
         set_by_lua_block $r_host {
             local host = ngx.var.host
             local shared_data = ngx.shared.domain_mappings
             return shared_data:get("target_host_for_" .. host)
         }
-   
-        set $r_uri $request_uri;
-        if ($r_uri ~* "^/internal_proxy/(.*)") {
-            set $r_uri /$1;
+        
+        set_by_lua_block $r_uri {
+            local host = ngx.var.host
+            local shared_data = ngx.shared.domain_mappings
+            local uri = shared_data:get("target_uri_for_" .. host) or ngx.var.uri
+            
+            -- 移除内部代理前缀
+            uri = ngx.re.sub(uri, "^/internal_proxy", "", "jo")
+            
+            -- 添加查询参数
+            if ngx.var.is_args == "?" and ngx.var.args then
+                uri = uri .. "?" .. ngx.var.args
+            end
+            
+            return uri
         }
 
+        # 代理请求设置
         proxy_pass https://$r_host$r_uri;
         proxy_ssl_server_name on;
         proxy_set_header Host $r_host;
@@ -376,6 +455,73 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_http_version 1.1;
+        
+        # 修改响应头，移除安全限制
+        proxy_hide_header content-security-policy;
+        proxy_hide_header content-security-policy-report-only;
+        proxy_hide_header clear-site-data;
+        
+        # 添加CORS头
+        add_header access-control-allow-origin '*' always;
+        add_header access-control-allow-credentials 'true' always;
+        add_header cache-control 'public, max-age=14400' always;
+        
+        # 响应体处理 - 替换域名引用
+        lua_need_request_body on;
+        body_filter_by_lua_block {
+            local content_type = ngx.header["Content-Type"] or ""
+            
+            -- 只处理文本内容
+            if string.find(content_type, "text/") or
+               string.find(content_type, "application/json") or
+               string.find(content_type, "application/javascript") or
+               string.find(content_type, "application/xml") then
+                
+                local chunk = ngx.arg[1]
+                local eof = ngx.arg[2]
+                
+                -- 初始化或获取缓冲区
+                ngx.ctx.buffered = ngx.ctx.buffered or ""
+                ngx.ctx.buffered = ngx.ctx.buffered .. (chunk or "")
+                
+                -- 如果是最后一个块，处理整个响应
+                if eof then
+                    local body = ngx.ctx.buffered
+                    local host = ngx.var.host
+                    local shared_data = ngx.shared.domain_mappings
+                    
+                    -- 提取域名后缀
+                    local domain_suffix = host:match("^[^.]+%.(.*)$")
+                    if not domain_suffix then
+                        domain_suffix = ""
+                    end
+                    
+                    -- 替换所有域名引用
+                    for proxy_domain, original_domain in shared_data:pairs() do
+                        if type(proxy_domain) == "string" and type(original_domain) == "string" then
+                            local escaped_domain = original_domain:gsub("%.",'\\.')
+                            
+                            -- 替换完整URLs
+                            body = ngx.re.gsub(body, "(https?://)" .. escaped_domain .. "(?=/|\"|'|\\s|$)", "$1" .. proxy_domain, "jo")
+                            
+                            -- 替换协议相对URLs
+                            body = ngx.re.gsub(body, "(//)" .. escaped_domain .. "(?=/|\"|'|\\s|$)", "$1" .. proxy_domain, "jo")
+                        end
+                    end
+                    
+                    -- 处理相对路径
+                    if host:match("^git\.") then
+                        body = ngx.re.gsub(body, "(?<=[\"'])\\/((?!\\/|[a-zA-Z]+:))", "https://" .. host .. "/", "jo")
+                    end
+                    
+                    ngx.arg[1] = body
+                    ngx.arg[2] = true
+                else
+                    ngx.arg[1] = nil
+                    ngx.arg[2] = false
+                end
+            end
+        }
     }
 }
 ```
