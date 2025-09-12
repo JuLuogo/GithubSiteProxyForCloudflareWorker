@@ -31,6 +31,9 @@ var domainMappings = map[string]string{
   "github.global.ssl.fastly.net":  "github-global-ssl-fastly-net.",
   "api.npms.io":                   "api-npms-io.",
   "github.community":              "github-community.",
+  "zh.wikipedia.org":              "wj.",
+  "upload.wikimedia.org":          "upload.",
+  "meta.wikimedia.org":            "meta.",
 }
 
 // 需要重定向的路径
