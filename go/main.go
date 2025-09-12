@@ -119,16 +119,14 @@ func modifyResponse(body []byte, contentType, hostPrefix, currentHostname string
 func handleRequest(w http.ResponseWriter, r *http.Request) {
 	currentHost := r.Host
 
-	// 添加鉴权逻辑 - 根路径返回403
-	if r.URL.Path == "/" {
-		http.Error(w, "Access Forbidden", http.StatusNotFound)
-		return
-	}
-
 	// 特殊路径 /peroe 允许访问
 	if r.URL.Path == "/peroe" {
 		// 重写路径为根路径以便正常处理
 		r.URL.Path = "/"
+	} else if r.URL.Path == "/" {
+		// 添加鉴权逻辑 - 根路径返回403
+		http.Error(w, "Access Forbidden", http.StatusNotFound)
+		return
 	}
 
 	// 检查特殊路径重定向
