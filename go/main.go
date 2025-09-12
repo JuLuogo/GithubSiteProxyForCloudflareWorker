@@ -97,19 +97,31 @@ func modifyResponse(body []byte, contentType, hostPrefix, currentHostname string
 		escapedDomain := strings.ReplaceAll(originalDomain, ".", `\.`)
 		
 		// 替换完整URLs - 使用正则表达式确保精确匹配
-		httpsPattern := regexp.MustCompile(`https?://` + escapedDomain + `(?=/|"|'|\s|$)`)
-		text = httpsPattern.ReplaceAllString(text, "https://"+fullProxyDomain)
+		httpsPattern := regexp.MustCompile(`https?://` + escapedDomain + `(/|"|'|\s|$)`)
+		text = httpsPattern.ReplaceAllStringFunc(text, func(match string) string {
+			// 保留匹配的结尾字符
+			suffix := match[len("https://"+originalDomain):]
+			return "https://" + fullProxyDomain + suffix
+		})
 		
 		// 替换协议相对URLs
-		protocolRelativePattern := regexp.MustCompile(`//` + escapedDomain + `(?=/|"|'|\s|$)`)
-		text = protocolRelativePattern.ReplaceAllString(text, "//"+fullProxyDomain)
+		protocolRelativePattern := regexp.MustCompile(`//` + escapedDomain + `(/|"|'|\s|$)`)
+		text = protocolRelativePattern.ReplaceAllStringFunc(text, func(match string) string {
+			// 保留匹配的结尾字符
+			suffix := match[len("//"+originalDomain):]
+			return "//" + fullProxyDomain + suffix
+		})
 	}
 
 	// 处理相对路径，使用正则表达式匹配worker.js的逻辑
 	if hostPrefix == "gh." {
 		// 使用正则表达式替换引号内的相对路径，但排除绝对URL和协议
-		relativePathPattern := regexp.MustCompile(`(?<=["'])/(?!/|[a-zA-Z]+:)`)
-		text = relativePathPattern.ReplaceAllString(text, "https://"+currentHostname+"/")
+		relativePathPattern := regexp.MustCompile(`(["'])/(?!/|[a-zA-Z]+:)`)
+		text = relativePathPattern.ReplaceAllStringFunc(text, func(match string) string {
+			// 保留引号，只替换路径部分
+			quote := match[:1]
+			return quote + "https://" + currentHostname + "/"
+		})
 	}
 
 	return []byte(text)
