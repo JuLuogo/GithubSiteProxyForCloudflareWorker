@@ -23,33 +23,6 @@ const domain_mappings = {
 // 需要重定向的路径
 const redirect_paths = ['/login', '/signup', '/copilot'];
 
-// 简单主页（参考 Netlify 项目 public/index.html）
-function getHomepageHtml() {
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cloudflare Workers GitHub 反代 (gh-*)</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 40px; line-height: 1.6; }
-    code { background: #f3f3f3; padding: 2px 6px; border-radius: 4px; }
-  </style>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https: http:; img-src * data: blob: https: http:; style-src * 'unsafe-inline'; script-src * 'unsafe-inline' 'unsafe-eval'"> 
-  </head>
-<body>
-  <h1>Cloudflare Workers GitHub 反代 (gh-*)</h1>
-  <p>本项目通过 Cloudflare Workers 将 <code>gh-*</code> 前缀子域名代理到 GitHub 及相关域名。</p>
-  <h2>使用示例</h2>
-  <ul>
-    <li><code>https://gh.your-domain.com</code> → <code>https://github.com</code></li>
-    <li><code>https://api-github-com.your-domain.com</code> → <code>https://api.github.com</code></li>
-  </ul>
-  <p>请在域名提供商（如 Cloudflare）中添加对应子域，并指向此 Worker 路由。</p>
-</body>
-</html>`;
-}
-
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request));
 });
@@ -63,14 +36,10 @@ async function handleRequest(request) {
     return new Response('Access Forbidden', { status: 404 });
   }
   
-  // 特殊路径 /peroe 显示为主页（直接返回静态主页 HTML）
+  // 特殊路径 /peroe 允许访问
   if (url.pathname === '/peroe') {
-    const headers = new Headers({
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-cache',
-      'access-control-allow-origin': '*'
-    });
-    return new Response(getHomepageHtml(), { status: 200, headers });
+    // 重写路径为根路径以便正常处理
+    url.pathname = '/';
   }
   
   // 检测Host头，优先使用Host头中的域名来决定后缀
