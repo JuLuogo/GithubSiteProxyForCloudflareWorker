@@ -23,6 +23,33 @@ const domain_mappings = {
 // 需要重定向的路径
 const redirect_paths = ['/login', '/signup', '/copilot'];
 
+// 简单主页（参考 Netlify 项目 public/index.html）
+function getHomepageHtml() {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cloudflare Workers GitHub 反代 (gh-*)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 40px; line-height: 1.6; }
+    code { background: #f3f3f3; padding: 2px 6px; border-radius: 4px; }
+  </style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https: http:; img-src * data: blob: https: http:; style-src * 'unsafe-inline'; script-src * 'unsafe-inline' 'unsafe-eval'"> 
+  </head>
+<body>
+  <h1>Cloudflare Workers GitHub 反代 (gh-*)</h1>
+  <p>本项目通过 Cloudflare Workers 将 <code>gh-*</code> 前缀子域名代理到 GitHub 及相关域名。</p>
+  <h2>使用示例</h2>
+  <ul>
+    <li><code>https://gh.your-domain.com</code> → <code>https://github.com</code></li>
+    <li><code>https://api-github-com.your-domain.com</code> → <code>https://api.github.com</code></li>
+  </ul>
+  <p>请在域名提供商（如 Cloudflare）中添加对应子域，并指向此 Worker 路由。</p>
+</body>
+</html>`;
+}
+
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request));
 });
@@ -36,10 +63,14 @@ async function handleRequest(request) {
     return new Response('Access Forbidden', { status: 404 });
   }
   
-  // 特殊路径 /peroe 允许访问
+  // 特殊路径 /peroe 显示为主页（直接返回静态主页 HTML）
   if (url.pathname === '/peroe') {
-    // 重写路径为根路径以便正常处理
-    url.pathname = '/';
+    const headers = new Headers({
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-cache',
+      'access-control-allow-origin': '*'
+    });
+    return new Response(getHomepageHtml(), { status: 200, headers });
   }
   
   // 检测Host头，优先使用Host头中的域名来决定后缀
@@ -113,9 +144,35 @@ async function handleRequest(request) {
     new_response_headers.set('access-control-allow-origin', '*');
     new_response_headers.set('access-control-allow-credentials', 'true');
     new_response_headers.set('cache-control', 'public, max-age=14400');
+    // 删除上游 CSP，避免阻断资源加载
     new_response_headers.delete('content-security-policy');
+    new_response_headers.delete('Content-Security-Policy');
     new_response_headers.delete('content-security-policy-report-only');
+    new_response_headers.delete('Content-Security-Policy-Report-Only');
     new_response_headers.delete('clear-site-data');
+    
+    // 覆盖为宽松 CSP，允许脚本、样式、字体、图片等从代理域加载
+    new_response_headers.set('content-security-policy', [
+      "default-src * data: blob: https: http:",
+      "script-src * data: blob: 'unsafe-inline' 'unsafe-eval' https: http:",
+      "script-src-elem * data: blob: 'unsafe-inline' 'unsafe-eval' https: http:",
+      "script-src-attr 'unsafe-inline'",
+      "style-src * data: blob: 'unsafe-inline' https: http:",
+      "style-src-elem * data: blob: 'unsafe-inline' https: http:",
+      "style-src-attr 'unsafe-inline'",
+      "img-src * data: blob: https: http:",
+      "font-src * data: blob: https: http:",
+      "connect-src * data: blob: https: http: wss: ws:",
+      "media-src * data: blob: https: http:",
+      "frame-src * data: blob: https: http:",
+      "worker-src * data: blob: https: http:",
+      "manifest-src * data: blob: https: http:",
+      "prefetch-src *",
+      "frame-ancestors *",
+      "base-uri *",
+      "form-action *",
+      "upgrade-insecure-requests"
+    ].join('; '));
     
     // 处理响应内容，替换域名引用，使用有效主机名来决定域名后缀
     const modified_body = await modifyResponse(response_clone, host_prefix, effective_host);
@@ -155,6 +212,11 @@ async function modifyResponse(response, host_prefix, effective_hostname) {
   }
 
   let text = await response.text();
+  
+  // 如果是 HTML 文档，移除所有 CSP 的 meta 标签，避免策略继续生效
+  if (content_type.includes('text/html')) {
+    text = text.replace(/<meta[^>]*http-equiv=["']?(?:Content-Security-Policy|Content-Security-Policy-Report-Only)["']?[^>]*>/gi, '');
+  }
   
   // 使用有效主机名获取域名后缀部分（用于构建完整的代理域名）
   const domain_suffix = effective_hostname.substring(host_prefix.length);
