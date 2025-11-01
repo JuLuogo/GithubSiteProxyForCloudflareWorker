@@ -1,13 +1,16 @@
-name: Docker Image CI
+# 1. 名称已修改为 "go"
+name: go
 
 on:
   push:
     branches: [ "main" ]
+    # 2. 添加了 paths 过滤器，只有 go/ 目录下的变更才会触发
+    paths:
+      - 'go/**'
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # ⚠️ 必须添加这个 permissions 块，否则 GITHUB_TOKEN 没有权限推送到 ghcr.io
     permissions:
       contents: read
       packages: write
@@ -16,7 +19,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 新增步骤：将仓库名转换为小写并设置为输出
     - name: Set repo name to lowercase
       id: string
       run: echo "repo=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
@@ -33,9 +35,6 @@ jobs:
       with:
         context: ./go
         push: true
-        # 修改这里：使用上一步转换后的小写仓库名
-        tags: ghcr.io/${{ steps.string.outputs.repo }}:${{ github.sha }}
-        # 如果你还想要一个 latest 标签，可以这样写：
-        # tags: |
-        #   ghcr.io/${{ steps.string.outputs.repo }}:${{ github.sha }}
-        #   ghcr.io/${{ steps.string.outputs.repo }}:latest
+        tags: |
+          ghcr.io/${{ steps.string.outputs.repo }}:${{ github.sha }}
+          ghcr.io/${{ steps.string.outputs.repo }}:latest
