@@ -20,6 +20,14 @@ const domain_mappings = {
   'github.community': 'github-community.'
 };
 
+// 自定义域名映射 (Custom Domain Mappings)
+// 格式: '原始域名': '自定义代理域名'
+// 如果配置了此项，将优先使用此处配置的域名，不再使用前缀拼接方式
+// 注意：自定义代理域名可以是本 Worker 处理的域名，也可以是外部已经搭建好的反代服务
+const custom_domains = {
+  // 'avatars.githubusercontent.com': '123.com',
+};
+
 // 需要重定向的路径
 const redirect_paths = ['/login', '/signup', '/copilot'];
 
@@ -57,18 +65,30 @@ async function handleRequest(request) {
     return Response.redirect(url.href);
   }
 
-  // 从有效主机名中提取前缀
-  const host_prefix = getProxyPrefix(effective_host);
-  if (!host_prefix) {
-    return new Response('Domain not configured for proxy', { status: 404 });
-  }
-
-  // 根据前缀找到对应的原始域名
   let target_host = null;
-  for (const [original, prefix] of Object.entries(domain_mappings)) {
-    if (prefix === host_prefix) {
+  let host_prefix = null;
+
+  // 1. 检查是否匹配自定义域名 (优先)
+  for (const [original, custom] of Object.entries(custom_domains)) {
+    if (effective_host === custom) {
       target_host = original;
       break;
+    }
+  }
+
+  // 2. 如果没有匹配自定义域名，则尝试使用前缀匹配
+  if (!target_host) {
+    // 从有效主机名中提取前缀
+    host_prefix = getProxyPrefix(effective_host);
+    
+    if (host_prefix) {
+      // 根据前缀找到对应的原始域名
+      for (const [original, prefix] of Object.entries(domain_mappings)) {
+        if (prefix === host_prefix) {
+          target_host = original;
+          break;
+        }
+      }
     }
   }
 
@@ -143,6 +163,50 @@ async function handleRequest(request) {
       "upgrade-insecure-requests"
     ].join('; '));
     
+    // 处理重定向 (301/302/303/307/308)
+    // 许多视频网站会将流量重定向到 CDN，我们需要拦截这个重定向并将 CDN 域名也纳入代理
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = new_response_headers.get('Location');
+      if (location) {
+        // 尝试解析重定向地址
+        try {
+          const locUrl = new URL(location, new_url.href);
+          // 简单的逻辑：如果重定向到了外部域名，我们需要改写它指向我们的代理
+          // 这里我们使用一种通用的重写策略：将目标 URL 作为参数，或者尝试寻找映射
+          // 为了简单起见，如果是在已知映射中，我们重写为代理域名；否则保持原样（可能导致跳出代理）
+          
+          let newLocation = null;
+          
+          // 1. 检查自定义域名
+          for (const [original, custom] of Object.entries(custom_domains)) {
+            if (locUrl.hostname === original) {
+              locUrl.hostname = custom;
+              newLocation = locUrl.href;
+              break;
+            }
+          }
+          
+          // 2. 检查标准映射
+          if (!newLocation && host_prefix) {
+            const domain_suffix = effective_host.substring(host_prefix.length);
+            for (const [original, prefix] of Object.entries(domain_mappings)) {
+              if (locUrl.hostname === original) {
+                locUrl.hostname = `${prefix}${domain_suffix}`;
+                newLocation = locUrl.href;
+                break;
+              }
+            }
+          }
+
+          if (newLocation) {
+            new_response_headers.set('Location', newLocation);
+          }
+        } catch (e) {
+          console.error('Failed to parse Location header:', e);
+        }
+      }
+    }
+
     // 处理响应内容，替换域名引用，使用有效主机名来决定域名后缀
     const modified_body = await modifyResponse(response_clone, host_prefix, effective_host);
 
@@ -175,6 +239,12 @@ function getProxyPrefix(host) {
 async function modifyResponse(response, host_prefix, effective_hostname) {
   // 只处理文本内容
   const content_type = response.headers.get('content-type') || '';
+  
+  // 严格排除视频、音频和二进制流，防止破坏文件结构
+  if (content_type.includes('video/') || content_type.includes('audio/') || content_type.includes('application/octet-stream')) {
+    return response.body;
+  }
+
   if (!content_type.includes('text/') && !content_type.includes('application/json') && 
       !content_type.includes('application/javascript') && !content_type.includes('application/xml')) {
     return response.body;
@@ -187,25 +257,45 @@ async function modifyResponse(response, host_prefix, effective_hostname) {
     text = text.replace(/<meta[^>]*http-equiv=["']?(?:Content-Security-Policy|Content-Security-Policy-Report-Only)["']?[^>]*>/gi, '');
   }
   
-  // 使用有效主机名获取域名后缀部分（用于构建完整的代理域名）
-  const domain_suffix = effective_hostname.substring(host_prefix.length);
-  
-  // 替换所有域名引用
-  for (const [original_domain, proxy_prefix] of Object.entries(domain_mappings)) {
+  // 1. 处理自定义域名映射 (优先级最高)
+  for (const [original_domain, custom_domain] of Object.entries(custom_domains)) {
     const escaped_domain = original_domain.replace(/\./g, '\\.');
-    const full_proxy_domain = `${proxy_prefix}${domain_suffix}`;
     
     // 替换完整URLs
     text = text.replace(
       new RegExp(`https?://${escaped_domain}(?=/|"|'|\\s|$)`, 'g'),
-      `https://${full_proxy_domain}`
+      `https://${custom_domain}`
     );
     
     // 替换协议相对URLs
     text = text.replace(
       new RegExp(`//${escaped_domain}(?=/|"|'|\\s|$)`, 'g'),
-      `//${full_proxy_domain}`
+      `//${custom_domain}`
     );
+  }
+
+  // 2. 处理标准前缀映射 (仅当存在 host_prefix 时)
+  if (host_prefix) {
+    // 使用有效主机名获取域名后缀部分（用于构建完整的代理域名）
+    const domain_suffix = effective_hostname.substring(host_prefix.length);
+    
+    // 替换所有域名引用
+    for (const [original_domain, proxy_prefix] of Object.entries(domain_mappings)) {
+      const escaped_domain = original_domain.replace(/\./g, '\\.');
+      const full_proxy_domain = `${proxy_prefix}${domain_suffix}`;
+      
+      // 替换完整URLs
+      text = text.replace(
+        new RegExp(`https?://${escaped_domain}(?=/|"|'|\\s|$)`, 'g'),
+        `https://${full_proxy_domain}`
+      );
+      
+      // 替换协议相对URLs
+      text = text.replace(
+        new RegExp(`//${escaped_domain}(?=/|"|'|\\s|$)`, 'g'),
+        `//${full_proxy_domain}`
+      );
+    }
   }
 
   // 处理相对路径，使用有效主机名

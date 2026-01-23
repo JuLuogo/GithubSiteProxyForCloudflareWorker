@@ -6,24 +6,66 @@
 
 ## 特性
 
-- **子域名匹配系统**：使用 `gh.` 前缀作为GitHub的代理入口，支持任何域名后缀
-- **完整的资源映射**：支持GitHub相关的所有主要域名，包括API、静态资源、用户内容等
-- **内容替换**：自动替换响应中的所有域名引用，确保链接正常工作
-- **路径修复**：解决嵌套URL路径问题，特别针对仓库提交信息等特殊路径
-- **访问控制**：根路径访问控制，支持通过特殊路径访问
-- **安全重定向**：对敏感路径（如登录页面）进行安全重定向
-- **HTTPS强制**：自动将HTTP请求升级为HTTPS
+- **灵活的域名映射系统**：
+  - **前缀映射**：支持使用 `gh.` 等前缀批量映射所有 GitHub 子域名。
+  - **独立域名映射**：支持将特定的 GitHub 域名（如 `avatars.githubusercontent.com`）映射到完全独立的自定义域名（如 `api.example.com`）。
+- **外部反代支持**：支持混合使用本 Worker 和外部已有的反代服务。
+- **流媒体与视频支持**：
+  - **智能重定向**：自动处理视频网站（如 YouTube）的 302 跳转，确保 CDN 流量也经过代理。
+  - **二进制保护**：自动识别并保护视频、音频文件，避免因文本替换导致的文件损坏。
+- **完整的资源映射**：支持GitHub相关的所有主要域名。
+- **内容替换**：自动替换响应中的所有域名引用，确保链接正常工作。
+- **路径修复**：解决嵌套URL路径问题。
+- **HTTPS强制**：自动将HTTP请求升级为HTTPS。
 
-## 支持的域名映射
+## 域名映射配置指南
 
-服务支持以下GitHub相关域名的代理访问：
+### 1. 标准前缀映射（默认）
+使用 `domain_mappings` 配置前缀。例如 `github.com` 映射为 `gh.your-domain.com`。
 
-- github.com → gh.[您的域名]
-- avatars.githubusercontent.com → avatars-githubusercontent-com.[您的域名]
-- github.githubassets.com → github-githubassets-com.[您的域名]
-- api.github.com → api-github-com.[您的域名]
-- raw.githubusercontent.com → raw-githubusercontent-com.[您的域名]
-- 以及更多GitHub相关服务域名
+```javascript
+const domain_mappings = {
+  'github.com': 'gh.',
+  // ... 其他映射
+};
+```
+
+### 2. 独立自定义域名（新功能）
+使用 `custom_domains` 配置特定的独立域名。这优先级高于前缀映射。
+
+**场景 A：使用本 Worker 代理**
+如果您想用 `img.example.com` 来代理 `avatars.githubusercontent.com`：
+1. 在 Cloudflare 解析 `img.example.com` 到本 Worker。
+2. 配置：
+```javascript
+const custom_domains = {
+  'avatars.githubusercontent.com': 'img.example.com',
+};
+```
+
+**场景 B：使用外部反代服务**
+如果您已经有一个外部搭建好的反代（例如 `api.external.com` 已经反代了 `raw.githubusercontent.com`）：
+1. 不需要修改 Cloudflare 解析。
+2. 配置：
+```javascript
+const custom_domains = {
+  'raw.githubusercontent.com': 'api.external.com',
+};
+```
+Worker 会自动将页面中的相关链接替换为您的外部域名。
+
+### 3. 视频/流媒体网站支持
+要支持视频网站（如 YouTube），需要在 `custom_domains` 中添加相关域名映射。
+
+```javascript
+const custom_domains = {
+  'www.youtube.com': 'yt.example.com',
+  'googlevideo.com': 'video.example.com', // 必须映射 CDN 域名
+};
+```
+Worker 会自动处理：
+- 视频文件的透传（不修改内容）。
+- 302 跳转的重写（防止跳回原站）。
 
 ## 部署指南
 
@@ -50,12 +92,6 @@
 4. **配置Worker路由**
    - 添加路由模式如 `gh.您的域名/*` 指向您的Worker
    - 对其他代理子域重复此操作
-
-### 配置自定义域名
-
-如果您想使用不同的域名前缀，请修改代码中的`domain_mappings`对象，将默认的`gh.`等前缀替换为您喜欢的前缀。
-
-
 
 ## 使用方法
 
@@ -84,18 +120,17 @@ https://gh.您的域名/
 https://gh.您的域名/peroe
 ```
 
-其他GitHub资源的访问方式类似，系统会自动处理域名映射和内容替换。
-
 ## 技术说明
 
 ### 工作原理
 
-1. 接收对代理域名的请求
-2. 识别目标GitHub域名
-3. 转发请求到GitHub服务器
-4. 接收GitHub的响应
-5. 替换响应内容中的域名引用
-6. 返回修改后的响应给用户
+1. **请求处理**：
+   - 检查 `custom_domains`：如果匹配，直接代理到对应原站。
+   - 检查 `domain_mappings`：如果匹配前缀，代理到对应原站。
+2. **响应处理**：
+   - **MIME 检查**：如果是视频/音频，直接返回，不修改。
+   - **重定向处理**：拦截 3xx 跳转，重写 Location 头。
+   - **内容替换**：先替换 `custom_domains` 中的域名，再替换 `domain_mappings` 中的域名。
 
 ### 特殊路径处理
 
@@ -106,39 +141,6 @@ https://gh.您的域名/peroe
 ```
 
 这类路径会被正确截断并转发到GitHub。
-
-## 安全考虑
-
-- **访问控制**：根路径默认被禁止访问，只能通过特殊路径访问
-
-- **代理透明**：代理服务不存储或处理用户凭据
-- **敏感路径重定向**：登录、注册等敏感路径会被重定向到其他网站
-- **HTTPS加密**：所有流量都通过HTTPS加密传输
-
-
-## 限制
-
-- 不支持GitHub的登录和注册功能
-- 某些高级GitHub功能可能不完全兼容
-- 不能代替GitHub CLI或Git等工具的直接连接
-
-## 故障排除
-
-如果遇到问题：
-
-1. 确认DNS记录配置正确
-2. 检查Worker是否正常运行
-3. 尝试清除浏览器缓存
-4. 检查请求和响应日志以获取详细错误信息
-
-## 贡献指南
-
-欢迎提交Pull Request或Issue来改进此项目。特别欢迎以下方面的贡献：
-
-- 增加对更多GitHub相关域名的支持
-- 改进内容替换逻辑
-- 增强错误处理机制
-- 添加性能优化
 
 ## 免责声明
 
