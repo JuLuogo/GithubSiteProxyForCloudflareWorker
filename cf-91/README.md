@@ -30,6 +30,29 @@
     *   伪造请求头，绕过源站限制。
     *   M3U8 动态优化。
 
+## 🔧 环境变量配置 (Environment Variables)
+
+所有环境变量均在 **Cloudflare Dashboard -> Workers -> [Your Service] -> Settings -> Variables** 中设置。
+
+### 1. Site Worker (`pornhub-site`)
+
+| 变量名 | 必填 | 默认值 | 可选值 | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| `VIDEO_MODE` | 否 | `direct` | `direct` | **直连模式**：页面代理，视频直连源站（低成本/调试） |
+| | | | `cdn` | **CDN 模式**：视频通过 EdgeOne 等外部 CDN 加速（推荐主力模式） |
+| | | | `worker` | **Worker 模式**：视频流量全部经过 Video Worker（救急/兜底） |
+
+> **注意**：
+> *   修改 `VIDEO_MODE` 后，新生成的页面链接会立即生效。
+> *   推荐生产环境默认使用 `cdn`，备用 `worker`。
+
+### 2. Video Worker (`pornhub-video`)
+
+目前 Video Worker **不需要**任何环境变量配置。它通过代码内置逻辑自动处理：
+*   自动识别目标域名
+*   自动伪造 Referer/Origin
+*   自动处理 M3U8 分流
+
 ## 🚀 部署指南
 
 ### 1. 准备工作
