@@ -10,9 +10,6 @@
   - **前缀映射**：支持使用 `gh.` 等前缀批量映射所有 GitHub 子域名。
   - **独立域名映射**：支持将特定的 GitHub 域名（如 `avatars.githubusercontent.com`）映射到完全独立的自定义域名（如 `api.example.com`）。
 - **外部反代支持**：支持混合使用本 Worker 和外部已有的反代服务。
-- **流媒体与视频支持**：
-  - **智能重定向**：自动处理视频网站（如 YouTube）的 302 跳转，确保 CDN 流量也经过代理。
-  - **二进制保护**：自动识别并保护视频、音频文件，避免因文本替换导致的文件损坏。
 - **完整的资源映射**：支持GitHub相关的所有主要域名。
 - **内容替换**：自动替换响应中的所有域名引用，确保链接正常工作。
 - **路径修复**：解决嵌套URL路径问题。
@@ -53,19 +50,6 @@ const custom_domains = {
 };
 ```
 Worker 会自动将页面中的相关链接替换为您的外部域名。
-
-### 3. 视频/流媒体网站支持
-要支持视频网站（如 YouTube），需要在 `custom_domains` 中添加相关域名映射。
-
-```javascript
-const custom_domains = {
-  'www.youtube.com': 'yt.example.com',
-  'googlevideo.com': 'video.example.com', // 必须映射 CDN 域名
-};
-```
-Worker 会自动处理：
-- 视频文件的透传（不修改内容）。
-- 302 跳转的重写（防止跳回原站）。
 
 ## 部署指南
 
@@ -128,8 +112,6 @@ https://gh.您的域名/peroe
    - 检查 `custom_domains`：如果匹配，直接代理到对应原站。
    - 检查 `domain_mappings`：如果匹配前缀，代理到对应原站。
 2. **响应处理**：
-   - **MIME 检查**：如果是视频/音频，直接返回，不修改。
-   - **重定向处理**：拦截 3xx 跳转，重写 Location 头。
    - **内容替换**：先替换 `custom_domains` 中的域名，再替换 `domain_mappings` 中的域名。
 
 ### 特殊路径处理

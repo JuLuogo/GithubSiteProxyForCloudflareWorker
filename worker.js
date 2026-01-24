@@ -163,50 +163,6 @@ async function handleRequest(request) {
       "upgrade-insecure-requests"
     ].join('; '));
     
-    // 处理重定向 (301/302/303/307/308)
-    // 许多视频网站会将流量重定向到 CDN，我们需要拦截这个重定向并将 CDN 域名也纳入代理
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const location = new_response_headers.get('Location');
-      if (location) {
-        // 尝试解析重定向地址
-        try {
-          const locUrl = new URL(location, new_url.href);
-          // 简单的逻辑：如果重定向到了外部域名，我们需要改写它指向我们的代理
-          // 这里我们使用一种通用的重写策略：将目标 URL 作为参数，或者尝试寻找映射
-          // 为了简单起见，如果是在已知映射中，我们重写为代理域名；否则保持原样（可能导致跳出代理）
-          
-          let newLocation = null;
-          
-          // 1. 检查自定义域名
-          for (const [original, custom] of Object.entries(custom_domains)) {
-            if (locUrl.hostname === original) {
-              locUrl.hostname = custom;
-              newLocation = locUrl.href;
-              break;
-            }
-          }
-          
-          // 2. 检查标准映射
-          if (!newLocation && host_prefix) {
-            const domain_suffix = effective_host.substring(host_prefix.length);
-            for (const [original, prefix] of Object.entries(domain_mappings)) {
-              if (locUrl.hostname === original) {
-                locUrl.hostname = `${prefix}${domain_suffix}`;
-                newLocation = locUrl.href;
-                break;
-              }
-            }
-          }
-
-          if (newLocation) {
-            new_response_headers.set('Location', newLocation);
-          }
-        } catch (e) {
-          console.error('Failed to parse Location header:', e);
-        }
-      }
-    }
-
     // 处理响应内容，替换域名引用，使用有效主机名来决定域名后缀
     const modified_body = await modifyResponse(response_clone, host_prefix, effective_host);
 
@@ -239,12 +195,6 @@ function getProxyPrefix(host) {
 async function modifyResponse(response, host_prefix, effective_hostname) {
   // 只处理文本内容
   const content_type = response.headers.get('content-type') || '';
-  
-  // 严格排除视频、音频和二进制流，防止破坏文件结构
-  if (content_type.includes('video/') || content_type.includes('audio/') || content_type.includes('application/octet-stream')) {
-    return response.body;
-  }
-
   if (!content_type.includes('text/') && !content_type.includes('application/json') && 
       !content_type.includes('application/javascript') && !content_type.includes('application/xml')) {
     return response.body;
